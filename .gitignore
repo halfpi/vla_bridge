@@ -1,0 +1,12 @@
+# 运行日志
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/

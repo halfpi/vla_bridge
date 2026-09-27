@@ -112,6 +112,32 @@ Ubuntu 是**VLA 推理与高层规划端**，负责：
 
 总体职责边界是：Ubuntu 决定“做什么”，Windows 只负责“安全地中继”，树莓派和设备控制器负责“能否安全执行以及如何实时执行”。
 
+### 2.4 VLA 代码开发与部署流向
+
+VLA 代码的开发环境与运行环境分离，代码流向严格单向：
+
+```text
+Windows 的 WSL（唯一开发源头，代码先写在这里）
+          │ rsync 单向推送（只推不拉）
+          ▼
+Ubuntu VLA 推理主机 /home/narwal/work/vla（运行与测试）
+```
+
+开发阶段在 Windows 的 WSL 中完成 VLA 代码编写。开发完成后，通过 `rsync` 把代码推送到 Ubuntu VLA 推理主机进行测试：
+
+```bash
+rsync -avzP --delete ~/work/vla/src narwal@10.0.80.19:/home/narwal/work/vla
+```
+
+约定：
+
+- **只推不拉**：只从 Windows 的 WSL 向 Ubuntu 推送代码，不从 Ubuntu 拷贝代码回来，也不让 Ubuntu 上的改动反向覆盖本地源码。WSL 是唯一开发源头，Ubuntu 只作为推理运行与联调环境。
+- **不使用 git 推送**：不向 Ubuntu 推送 git 仓库，也不推送到 GitHub。代码交付只通过上述 `rsync` 通道，Ubuntu 上不保留版本历史。
+- **Ubuntu 侧不做版本管理，不视为源码真源**：`/home/narwal/work/vla` 只是推理运行与测试目录，不是代码真源，也不作为恢复或回滚的依据；任何找回、回退都以 Windows WSL 中的开发目录为准。
+- **路径语义**：该命令源路径 `~/work/vla/src` 不带结尾 `/`，因此会在目标端同步为 `/home/narwal/work/vla/src`；若要只同步目录内容而不多建一层，需要写成 `~/work/vla/src/`。
+- **`--delete` 是破坏性选项**：会删除目标端 `src` 目录中源端已不存在的文件。由于是单向推送，Ubuntu 上手工创建的临时文件也会被清除，执行前应确认路径无误。
+- 该推送走 SSH，与 VLA 服务端口 `8443` 是两条独立通道：推送只用于传递代码，不用于传递运行期消息。
+
 ## 3. 为什么这种方案可以工作
 
 ### 3.1 “谁建立连接”和“谁发送数据”不是一回事
@@ -377,7 +403,9 @@ RUNNING --心跳超时/连接断开/动作非法--> SAFE_STOP
 - Ubuntu 只监听必要端口；
 - 记录用户、设备、会话、模型版本和动作审计日志；
 - SecureLink 策略只授权指定 Windows 设备访问 `10.0.80.19:8443`；
-- 不开放整个 Ubuntu 网段或无关端口。
+- 不开放整个 Ubuntu 网段或无关端口；
+- 代码推送通道（SSH/`rsync`）只用于从 Windows 向 Ubuntu 单向推送 VLA 代码，不用于传递运行期消息，也不反向拉取代码；
+- 推送内容不得包含密钥、证书或凭据，禁止把本地凭据同步到 Ubuntu（使用 `--exclude` 排除 `.env`、`*.pem`、`*.key`、`id_rsa*` 等）。
 
 VLA 服务可以监听所有本机地址：
 
@@ -524,9 +552,12 @@ Windows：Python/C#/C++ Application Relay + SecureLink
 连接B：Windows主动连接 10.0.80.19:8443
 安全：两段 mTLS + SecureLink 最小授权 + 独立设备身份
 控制：Ubuntu生成高层动作块，树莓派完成实时执行与本地安全闭环
+代码：VLA 代码在 Windows 的 WSL 中开发，再用 rsync 单向推送到 Ubuntu 运行测试
 ```
 
 实施顺序：
+
+> 开发前置：VLA 代码在 Windows 的 WSL 中编写，开发完成后用 `rsync -avzP --delete ~/work/vla/src narwal@10.0.80.19:/home/narwal/work/vla` 单向推送到 Ubuntu 作为测试环境，不使用 git 推送。
 
 1. 让 SecureLink 管理员开放 Windows 到 `10.0.80.19:8443/TCP`。
 2. 验证 Windows 与 Ubuntu 之间连接 B 的双向推送。
